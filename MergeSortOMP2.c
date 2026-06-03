@@ -1,16 +1,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
-#include <math.h> // Adicionado para utilizarmos a função pow() na fórmula
-#include <omp.h> // Inclusão obrigatória para utilizarmos as diretivas do OpenMP
+#include <math.h> 
+#include <omp.h> 
 
-// Definição do Threshold (Ponto de Corte). 
-// Vetores ou subvetores menores que este tamanho não gerarão novas tasks.
-#define THRESHOLD 2000 
+// Definição do Threshold Otimizado (Ponto de Corte de Alta Performance).
+// Subvetores menores que 100.000 elementos não gerarão o overhead de novas tasks.
+#define THRESHOLD 100000 
 
 /**
  * Método responsável por criar e preencher um vetor dinâmico com números inteiros aleatórios.
- * Mantido de forma sequencial para evitar "data race" na função rand() padrão do C.
  * @param tamanho O tamanho do vetor a ser gerado.
  * @return Um ponteiro para o vetor preenchido com valores aleatórios.
  */
@@ -18,7 +17,7 @@ int* preencherVetorAleatorio(int tamanho) {
     int* vetor = (int*) malloc(tamanho * sizeof(int));
     
     if (vetor == NULL) {
-        printf("Erro fatal: Nao foi possivel alocar memoria.\n");
+        printf("Erro fatal: Nao foi possivel alocar memoria para o vetor principal.\n");
         exit(1);
     }
 
@@ -30,159 +29,146 @@ int* preencherVetorAleatorio(int tamanho) {
 }
 
 /**
- * Método que combina (funde) dois subvetores ordenados de forma sequencial.
- * A fase de conquista (merge) permanece sequencial para cada conjunto de subvetores.
- * @param vetor O vetor principal.
+ * Método otimizado que combina dois subvetores utilizando um espaço de memória pré-alocado.
+ * ELIMINADO: Chamadas a malloc() e free() foram completamente extirpadas deste escopo.
+ * @param vetor O vetor principal contendo os dados.
+ * @param vetorTemp O vetor auxiliar pré-alocado que serve de área de trânsito.
  * @param esquerda O índice inicial do primeiro subvetor.
  * @param meio O índice final do primeiro subvetor.
  * @param direita O índice final do segundo subvetor.
  */
-void merge(int vetor[], int esquerda, int meio, int direita) {
-    int n1 = meio - esquerda + 1;
-    int n2 = direita - meio;
+void mergeOtimizado(int vetor[], int vetorTemp[], int esquerda, int meio, int direita) {
+    // Copia os dados do fragmento atual para o vetor temporário correspondente
+    for (int i = esquerda; i <= direita; i++) {
+        vetorTemp[i] = vetor[i];
+    }
 
-    int* vetorEsquerda = (int*) malloc(n1 * sizeof(int));
-    int* vetorDireita = (int*) malloc(n2 * sizeof(int));
+    int i = esquerda;      // Índice inicial do primeiro subvetor (metade esquerda)
+    int j = meio + 1;      // Índice inicial do segundo subvetor (metade direita)
+    int k = esquerda;      // Índice de posicionamento no vetor principal
 
-    for (int i = 0; i < n1; i++)
-        vetorEsquerda[i] = vetor[esquerda + i];
-    for (int j = 0; j < n2; j++)
-        vetorDireita[j] = vetor[meio + 1 + j];
-
-    int i = 0, j = 0, k = esquerda;
-    
-    while (i < n1 && j < n2) {
-        if (vetorEsquerda[i] <= vetorDireita[j]) {
-            vetor[k] = vetorEsquerda[i];
+    // Intercala os elementos de forma ordenada de volta no vetor original
+    while (i <= meio && j <= direita) {
+        if (vetorTemp[i] <= vetorTemp[j]) {
+            vetor[k] = vetorTemp[i];
             i++;
         } else {
-            vetor[k] = vetorDireita[j];
+            vetor[k] = vetorTemp[j];
             j++;
         }
         k++;
     }
 
-    while (i < n1) {
-        vetor[k] = vetorEsquerda[i];
+    // Copia os elementos restantes da metade esquerda, se houver
+    while (i <= meio) {
+        vetor[k] = vetorTemp[i];
         i++;
         k++;
     }
-
-    while (j < n2) {
-        vetor[k] = vetorDireita[j];
-        j++;
-        k++;
-    }
-
-    free(vetorEsquerda);
-    free(vetorDireita);
+    
+    // Nota arquitetural: Os elementos restantes da metade direita nao precisam ser copiados,
+    // pois ja ocupam a posicao correta no final do vetor principal.
 }
 
 /**
- * Método auxiliar puramente sequencial.
- * Será invocado quando o tamanho do subvetor for menor que o THRESHOLD,
- * cortando o overhead de criação de tarefas do OpenMP pela raiz.
+ * Método auxiliar puramente sequencial que utiliza a memória pré-alocada.
+ * Invocado automaticamente quando o tamanho do bloco cai abaixo do THRESHOLD otimizado.
  */
-void mergeSortSequencial(int vetor[], int esquerda, int direita) {
+void mergeSortSequencialOtimizado(int vetor[], int vetorTemp[], int esquerda, int direita) {
     if (esquerda < direita) {
         int meio = esquerda + (direita - esquerda) / 2;
 
-        mergeSortSequencial(vetor, esquerda, meio);
-        mergeSortSequencial(vetor, meio + 1, direita);
+        mergeSortSequencialOtimizado(vetor, vetorTemp, esquerda, meio);
+        mergeSortSequencialOtimizado(vetor, vetorTemp, meio + 1, direita);
 
-        merge(vetor, esquerda, meio, direita);
+        mergeOtimizado(vetor, vetorTemp, esquerda, meio, direita);
     }
 }
 
 /**
- * Método principal do MergeSort paralelizado com OpenMP Tasks e Threshold.
+ * Método principal do MergeSort paralelizado com OpenMP Tasks, Pre-alocação e Granularidade Fina.
  */
-void mergeSort(int vetor[], int esquerda, int direita) {
-    // Avalia o Ponto de Corte (Threshold)
-    // Se o subvetor atual for pequeno demais, abandona o paralelismo e resolve sequencialmente
+void mergeSortOtimizado(int vetor[], int vetorTemp[], int esquerda, int direita) {
+    // Avalia o novo Ponto de Corte de alta granularidade
     if ((direita - esquerda) < THRESHOLD) {
-        mergeSortSequencial(vetor, esquerda, direita);
-        return; // Retorna imediatamente após a ordenação sequencial finalizar
+        mergeSortSequencialOtimizado(vetor, vetorTemp, esquerda, direita);
+        return; 
     }
 
-    // Se o vetor ainda for grande, continua dividindo com as Tasks do OpenMP
     if (esquerda < direita) {
         int meio = esquerda + (direita - esquerda) / 2;
 
-        // Cria uma tarefa paralela independente para ordenar a primeira metade
-        // A cláusula shared(vetor) garante que todas as threads manipulem a mesma memória principal
-        #pragma omp task shared(vetor)
-        mergeSort(vetor, esquerda, meio);
+        // Cria uma tarefa paralela independente para a metade esquerda
+        // Ambas as threads compartilham de forma segura o vetor principal e o vetor temporario
+        #pragma omp task shared(vetor, vetorTemp) firstprivate(esquerda, meio)
+        mergeSortOtimizado(vetor, vetorTemp, esquerda, meio);
 
-        // Cria uma tarefa paralela independente para ordenar a segunda metade
-        #pragma omp task shared(vetor)
-        mergeSort(vetor, meio + 1, direita);
+        // Cria uma tarefa paralela independente para a metade direita
+        #pragma omp task shared(vetor, vetorTemp) firstprivate(meio, direita)
+        mergeSortOtimizado(vetor, vetorTemp, meio + 1, direita);
 
-        // Barreira de sincronização: aguarda rigorosamente que as duas metades acima terminem
+        // Barreira de sincronização: aguarda a conclusão das duas tarefas de divisão acima
         #pragma omp taskwait
 
-        // Após as duas metades estarem ordenadas pelas threads, o código as funde
-        merge(vetor, esquerda, meio, direita);
+        // Realiza a fusão dos dados ordenados utilizando a memória de trânsito compartilhada
+        mergeOtimizado(vetor, vetorTemp, esquerda, meio, direita);
     }
 }
 
 int main() {
-    // Configura o número máximo de threads do OpenMP para 8
+    // Configura o pool para 8 threads físicas, pareando com o ambiente de hardware
     omp_set_num_threads(8);
     
     srand(time(NULL));
-    printf("Iniciando testes de desempenho do MergeSort Paralelo com OpenMP...\n\n");
+    printf("Iniciando testes do MergeSort Paralelo Altamente Otimizado em C...\n\n");
     
-    // Abre o arquivo de log para anexar (append), preservando execuções anteriores
-    FILE *logFile = fopen("log_mergesort_paralelo_c.txt", "a");
+    FILE *logFile = fopen("log_mergesort_paralelo_otimizado_c.txt", "a");
     if (logFile == NULL) {
         printf("Erro fatal: Nao foi possivel abrir ou criar o arquivo de log.\n");
         return 1;
     }
 
-    fprintf(logFile, "--- Novo Teste de Desempenho (MergeSort Paralelo em C) ---\n");
+    fprintf(logFile, "--- Novo Teste de Desempenho (MergeSort Paralelo Otimizado em C) ---\n");
 
-    // Laço para variar o expoente n de 0 até 6, calculando 2^n * 1000
-    for (int n = 0; n <= 6; n++) {
-        // Calcula o tamanho dinâmico do vetor
+    // Laço parametrizado até o teto físico seguro estabelecido para o hardware da máquina (n = 20)
+    for (int n = 0; n <= 20; n++) {
         int tamanho = (int)(pow(2, n) * 1000);
         
-        // Instancia e preenche o vetor chamando a nossa fábrica de dados
+        // Instancia o vetor principal com valores aleatorios
         int* meuVetor = preencherVetorAleatorio(tamanho);
         
-        // Marca o tempo real de início utilizando a métrica correta do OpenMP
+        // PRÉ-ALOCAÇÃO GLOBAL: Aloca o vetor de trânsito uma única vez para esta iteração
+        int* meuVetorTemp = (int*) malloc(tamanho * sizeof(int));
+        if (meuVetorTemp == NULL) {
+            printf("Erro fatal: Memoria RAM insuficiente para o vetor auxiliar na iteracao n=%d.\n", n);
+            free(meuVetor);
+            break;
+        }
+        
         double tempoInicial = omp_get_wtime();
         
-        // O bloco parallel cria a nossa equipe de 8 threads
+        // Abre a região paralela do OpenMP
         #pragma omp parallel
         {
-            // A diretiva single garante que a PRIMEIRA chamada do MergeSort seja feita
-            // por apenas UMA thread mestre.
+            // Garante que apenas a thread mestre faça o disparo inicial do algoritmo
             #pragma omp single
             {
-                mergeSort(meuVetor, 0, tamanho - 1);
+                mergeSortOtimizado(meuVetor, meuVetorTemp, 0, tamanho - 1);
             }
         }
         
-        // Marca o tempo de encerramento do processamento em tempo real
         double tempoFinal = omp_get_wtime();
-        
-        // Calcula a diferença em segundos e converte para milissegundos
         double tempoExecucao = (tempoFinal - tempoInicial) * 1000.0;
         
-        // Exibe o resultado da carga atual no console para acompanhamento
         printf("%d elements => %.0f ms\n", tamanho, tempoExecucao);
-        
-        // Grava o mesmo resultado formatado no nosso arquivo de log
         fprintf(logFile, "%d elements => %.0f ms\n", tamanho, tempoExecucao);
         
-        // Libera a memória alocada dinamicamente nesta iteração
+        // Liberação cirúrgica das duas grandes estruturas de memória RAM
         free(meuVetor);
+        free(meuVetorTemp);
     }
     
-    printf("\nResultados salvos com sucesso no arquivo 'log_mergesort_paralelo_c.txt'.\n");
-    
-    // Fecha a conexão com o arquivo gravado no disco rígido
+    printf("\nResultados salvos com sucesso no arquivo 'log_mergesort_paralelo_otimizado_c.txt'.\n");
     fclose(logFile);
     
     return 0;

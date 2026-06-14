@@ -1,0 +1,23 @@
+--- Teste OpenMP: Abordagem por Niveis ---
+1000 elements => 0 ms
+2000 elements => 0 ms
+4000 elements => 0 ms
+8000 elements => 0 ms
+16000 elements => 1 ms
+32000 elements => 1 ms
+64000 elements => 2 ms
+128000 elements => 5 ms
+256000 elements => 9 ms
+512000 elements => 13 ms
+1024000 elements => 37 ms
+2048000 elements => 74 ms
+4096000 elements => 92 ms
+8192000 elements => 191 ms
+16384000 elements => 624 ms
+32768000 elements => 785 ms
+65536000 elements => 1631 ms
+131072000 elements => 3352 ms
+262144000 elements => 6898 ms
+524288000 elements => 14130 ms
+1048576000 elements => 29094 ms
+2097152000 elements => 59538 ms
